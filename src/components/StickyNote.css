@@ -1,0 +1,71 @@
+.sticky-note {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+  cursor: move;
+  transition: box-shadow 0.2s ease;
+}
+
+.sticky-note:hover {
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.2);
+}
+
+.sticky-note textarea {
+  flex-grow: 1;
+  border: none;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 12px;
+  resize: none;
+  font-size: 15px;
+  font-family: 'Segoe UI', sans-serif;
+  padding: 5px;
+  outline: none;
+  color: #333;
+  box-sizing: border-box;
+}
+
+.note-timestamp {
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 2px;
+  user-select: none;
+  line-height: 1.1;
+}
+
+.resize-handle {
+  width: 14px;
+  height: 14px;
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  cursor: nwse-resize;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+
+.delete-btn {
+  position: absolute;
+  top: 0px;
+  right: 1px;
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  cursor: pointer;
+  /* z-index: 1; */
+  transition: background 0.2s ease;
+}
+
+.delete-btn:hover {
+  background: #c0392b;
+}
+
+
