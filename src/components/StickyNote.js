@@ -1,67 +1,55 @@
+// StickyNote.js — fixed: keep full note data on update so position doesn’t reset
+
 import React, { useRef, useEffect, useState } from "react";
 import "./StickyNote.css";
 
-function StickyNote({ note, onUpdate, onDelete }) {
+export default function StickyNote({ note, onUpdate, onDelete }) {
   const noteRef = useRef(null);
-  const offset = useRef({ x: 0, y: 0 });
+  const dragOffset = useRef({ x: 0, y: 0 });
   const [tempText, setTempText] = useState(note.text);
 
-  // Debounced auto-save
+  /* helper to send full merged note object */
+  const emitUpdate = (partial) => {
+    onUpdate(note.id, { ...note, ...partial });
+  };
+
+  /* Debounced text save */
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (tempText !== note.text) {
-        onUpdate(note.id, { text: tempText });
-      }
-    }, 1000);
-    return () => clearTimeout(timeout);
+    const t = setTimeout(() => {
+      if (tempText !== note.text) emitUpdate({ text: tempText });
+    }, 500);
+    return () => clearTimeout(t);
   }, [tempText]);
 
-  // Sync text if changed externally
-  useEffect(() => {
-    setTempText(note.text);
-  }, [note.text]);
+  /* Sync external changes */
+  useEffect(() => setTempText(note.text), [note.text]);
 
-  // Drag Handlers
+  /* Drag */
   const startDrag = (e) => {
     if (e.target.tagName === "TEXTAREA" || e.target.className === "resize-handle") return;
     document.body.classList.add("no-select");
-    offset.current = {
-      x: e.clientX - note.x,
-      y: e.clientY - note.y,
-    };
+    dragOffset.current = { x: e.clientX - note.x, y: e.clientY - note.y };
     window.addEventListener("mousemove", onDrag);
     window.addEventListener("mouseup", stopDrag);
   };
-
-  const onDrag = (e) => {
-    onUpdate(note.id, {
-      x: e.clientX - offset.current.x,
-      y: e.clientY - offset.current.y,
-    });
-  };
-
+  const onDrag = (e) => emitUpdate({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
   const stopDrag = () => {
     window.removeEventListener("mousemove", onDrag);
     window.removeEventListener("mouseup", stopDrag);
     document.body.classList.remove("no-select");
   };
 
-  // Resize Handlers
+  /* Resize */
   const startResize = (e) => {
     document.body.classList.add("no-select");
     e.stopPropagation();
     window.addEventListener("mousemove", onResize);
     window.addEventListener("mouseup", stopResize);
   };
-
   const onResize = (e) => {
     const rect = noteRef.current.getBoundingClientRect();
-    onUpdate(note.id, {
-      width: Math.max(100, e.clientX - rect.left),
-      height: Math.max(100, e.clientY - rect.top),
-    });
+    emitUpdate({ width: Math.max(100, e.clientX - rect.left), height: Math.max(100, e.clientY - rect.top) });
   };
-
   const stopResize = () => {
     window.removeEventListener("mousemove", onResize);
     window.removeEventListener("mouseup", stopResize);
@@ -73,6 +61,7 @@ function StickyNote({ note, onUpdate, onDelete }) {
       ref={noteRef}
       className="sticky-note"
       style={{
+        position: "absolute",
         left: note.x,
         top: note.y,
         width: note.width,
@@ -81,22 +70,13 @@ function StickyNote({ note, onUpdate, onDelete }) {
       }}
       onMouseDown={startDrag}
     >
-      {/* ❌ Delete Button */}
       <button className="delete-btn" onClick={() => onDelete(note.id)}>×</button>
-
-      {/* 🕒 Timestamp */}
-      {/* <div className="note-timestamp">
-        <div>🕒 Created: {new Date(note.createdAt).toLocaleString()}</div>
-        <div>✏️ Edited: {new Date(note.updatedAt).toLocaleString()}</div>
-      </div> */}
-
-      {/* 📝 Textarea */}
-      <textarea value={tempText} onChange={(e) => setTempText(e.target.value)} />
-
-      {/* ↔️ Resize Handle */}
+      <textarea
+        value={tempText}
+        onChange={(e) => setTempText(e.target.value)}
+        style={{ width: "100%", height: "calc(100% - 20px)", resize: "none", border: "none", background: "transparent", outline: "none", fontSize: 14 }}
+      />
       <div className="resize-handle" onMouseDown={startResize}></div>
     </div>
   );
 }
-
-export default StickyNote;

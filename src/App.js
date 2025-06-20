@@ -1,13 +1,29 @@
-import React from 'react';
-import DrawingBoard from './components/DrawingBoard';
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import Projects from "./pages/Projects";
+import Board from "./pages/Board";
+// import DrawingBoard from "./components/DrawingBoard/";
 
-function App() {
+const token = () => localStorage.getItem("access_token");
+
+export default function App() {
   return (
-    <div>
-      {/* <h1 style={{ textAlign: 'center' }}>🎨 React Drawing App</h1> */}
-      <DrawingBoard />
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={token() ? <Navigate to="/projects" /> : <Navigate to="/login" />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+
+        {/* Protected routes */}
+        {token() && (
+          <>
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/board/:slug" element={<Board />} />
+            {/* <Route path="/" element={<DrawingBoard />} /> */}
+          </>
+        )}
+      </Routes>
+    </BrowserRouter>
   );
 }
-
-export default App;

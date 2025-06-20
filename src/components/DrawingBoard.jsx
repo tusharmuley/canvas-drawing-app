@@ -1,223 +1,210 @@
+/* DrawingBoard.js — React + Django‑Channels realtime board */
+
 import React, { useRef, useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import StickyNote from "./StickyNote";
 import html2canvas from "html2canvas";
+import { logout } from "../services/auth";
+import { v4 as uuidv4 } from "uuid";
 
-export default function DrawingBoard() {
-  /* Refs */
-  const canvasRef    = useRef(null);
-  const ctxRef       = useRef(null);
-  const boardRef     = useRef(null);           // wrapper for html2canvas
 
-  /* Drawing state */
+
+import Projects from "../pages/Projects";
+// import api from "../services/api";                 // axios wrapper
+
+const USER_NAME = `User-${Math.floor(Math.random() * 1000)}`; // demo
+
+export default function DrawingBoard({ slug, initial, projectName  }) {
+  // console.log('initianl',slug, initial)
+  /* refs */
+  const canvasRef  = useRef(null);
+  const ctxRef     = useRef(null);
+  const boardRef   = useRef(null);
+  const strokeBuf  = useRef([]);
+  const socketRef  = useRef(null);
+
+  const nav = useNavigate();
+
+  /* state */
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor]         = useState("#000000");
   const [lineWidth, setLineWidth] = useState(4);
   const [tool, setTool]           = useState("pen");
   const [history, setHistory]     = useState([]);
-  const [redoStack, setRedoStack] = useState([]);
+  const [redoStack, setRedo]      = useState([]);
+  const [notes, setNotes]         = useState(initial.notes || []);
+  const [showModal, setShowModal] = useState(false);
 
-  /* Sticky‑note state */
-  const [notes, setNotes] = useState([]);
-
-  /* ---------- Canvas init ---------- */
+  /* canvas init */
   useEffect(() => {
     const canvas = canvasRef.current;
     canvas.width  = window.innerWidth * 0.9;
     canvas.height = window.innerHeight * 0.8;
-
-    const ctx = canvas.getContext("2d");
-    ctx.lineCap     = "round";
-    ctx.strokeStyle = color;
-    ctx.lineWidth   = lineWidth;
-    ctx.fillStyle   = "#ffffff";
+    const ctx     = canvas.getContext("2d");
+    ctx.lineCap   = "round";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctxRef.current  = ctx;
-
+    ctxRef.current = ctx;
     setHistory([canvas.toDataURL()]);
   }, []);
 
-  /* ---------- Brush sync ---------- */
+  /* brush sync */
   useEffect(() => {
     if (ctxRef.current) {
-      ctxRef.current.strokeStyle = tool === "eraser" ? "#ffffff" : color;
       ctxRef.current.lineWidth   = lineWidth;
+      ctxRef.current.strokeStyle = tool === "eraser" ? "#ffffff" : color;
     }
   }, [color, tool, lineWidth]);
 
-  /* ---------- Drawing handlers ---------- */
-  const startDrawing = ({ nativeEvent }) => {
-    const { offsetX, offsetY } = nativeEvent;
-    ctxRef.current.beginPath();
-    ctxRef.current.moveTo(offsetX, offsetY);
-    setIsDrawing(true);
-  };
+  /* preload strokes */
+  useEffect(() => {
+    initial.events.forEach((e) => replayStroke(e));
+  }, [initial]);
 
-  const draw = ({ nativeEvent }) => {
-    if (!isDrawing) return;
-    const { offsetX, offsetY } = nativeEvent;
-    ctxRef.current.lineTo(offsetX, offsetY);
-    ctxRef.current.stroke();
-  };
+  /* websocket connect */
+  useEffect(() => {
+    const token  = localStorage.getItem("access_token");
+    const wsURL  = `ws://localhost:8000/ws/board/${slug}/?token=${token}`;
+    const socket = new WebSocket(wsURL);
+    socketRef.current = socket;
 
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    const snapshot = canvasRef.current.toDataURL();
-    setHistory((h) => [...h, snapshot]);
-    setRedoStack([]);
-  };
-
-  /* ---------- Undo / Redo ---------- */
-  const undo = () => {
-    if (history.length <= 1) return;
-    const newHist = [...history];
-    const last    = newHist.pop();
-    setHistory(newHist);
-    setRedoStack((r) => [...r, last]);
-
-    const img = new Image();
-    img.src = newHist[newHist.length - 1];
-    img.onload = () => {
-      const ctx = ctxRef.current;
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      ctx.drawImage(img, 0, 0);
+    socket.onmessage = (evt) => {
+      const data = JSON.parse(evt.data);
+      if (data.type === "draw")      replayStroke(data);
+      else if (data.type === "note") handleNote(data);
     };
+
+    return () => socket.close();
+  }, [slug]);
+
+  /* helpers */
+  const sendWS = (obj) => socketRef.current?.readyState === 1 && socketRef.current.send(JSON.stringify(obj));
+
+  const handleNote = ({ action, note }) => {
+    if (action === "create")  setNotes((p) => [...p, note]);
+    if (action === "update")  setNotes((p) => p.map((n) => (n.id === note.id ? note : n)));
+    if (action === "delete")  setNotes((p) => p.filter((n) => n.id !== note.id));
   };
 
+  /* drawing handlers */
+  const startDraw = ({ nativeEvent:{offsetX:x, offsetY:y} }) => {
+    ctxRef.current.beginPath(); ctxRef.current.moveTo(x, y);
+    setIsDrawing(true); strokeBuf.current = [{x,y}];
+  };
+  const draw = ({ nativeEvent:{offsetX:x, offsetY:y} }) => {
+    if (!isDrawing) return;
+    ctxRef.current.lineTo(x, y); ctxRef.current.stroke();
+    strokeBuf.current.push({x,y});
+  };
+  const stopDraw = () => {
+    if (!isDrawing) return; setIsDrawing(false);
+    setHistory((h)=>[...h, canvasRef.current.toDataURL()]); setRedo([]);
+    if (strokeBuf.current.length>1) sendWS({type:"draw",tool,color,line_width:lineWidth,points:strokeBuf.current,username:USER_NAME});
+  };
+
+  const replayStroke = ({ tool:t,color:c,line_width:lw,points }) => {
+    if (!points?.length) return;
+    const ctx = ctxRef.current; ctx.save();
+    ctx.lineWidth=lw; ctx.strokeStyle = t==="eraser"?"#ffffff":c;
+    ctx.beginPath(); ctx.moveTo(points[0].x,points[0].y);
+    points.slice(1).forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke(); ctx.restore();
+  };
+
+  /* undo/redo */
+  const undo = () => {
+    if (history.length<=1) return;
+    const h=[...history]; const last=h.pop(); setHistory(h); setRedo((r)=>[...r,last]);
+    const img=new Image(); img.src=h[h.length-1]; img.onload=()=>{ctxRef.current.clearRect(0,0,canvasRef.current.width,canvasRef.current.height);ctxRef.current.drawImage(img,0,0);}
+  };
   const redo = () => {
     if (!redoStack.length) return;
-    const stack = [...redoStack];
-    const next  = stack.pop();
-    setRedoStack(stack);
-    setHistory((h) => [...h, next]);
-
-    const img = new Image();
-    img.src = next;
-    img.onload = () => {
-      const ctx = ctxRef.current;
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      ctx.drawImage(img, 0, 0);
-    };
+    const r=[...redoStack]; const next=r.pop(); setRedo(r); setHistory((h)=>[...h,next]);
+    const img=new Image(); img.src=next; img.onload=()=>{ctxRef.current.clearRect(0,0,canvasRef.current.width,canvasRef.current.height);ctxRef.current.drawImage(img,0,0);}
   };
 
-  /* ---------- Clear ---------- */
-  const clearCanvas = () => {
-    const ctx = ctxRef.current;
-    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    setHistory([canvasRef.current.toDataURL()]);
-    setRedoStack([]);
-    setNotes([]);                      // clear notes too
-  };
+  // for logout 
+  const handlelogout = () => {
+    logout();
+    nav("/login");
+  
+  }
 
-  /* ---------- Download (canvas + notes) ---------- */
-  const downloadImage = async () => {
-    if (!boardRef.current) return;
-    const snapshot = await html2canvas(boardRef.current, { backgroundColor: null });
-    const link = document.createElement("a");
-    link.href = snapshot.toDataURL("image/png");
-    link.download = "drawing_with_notes.png";
-    link.click();
-  };
+  /* note ops */
+  const palette = ["#fff475","#f28b82","#ccff90","#a7ffeb","#d7aefb","#fdcfe8","#aecbfa"];
+  const randCol = ()=>palette[Math.floor(Math.random()*palette.length)];
+  const addNote   = ()=> sendWS({type:"note",action:"create",note:{id:uuidv4(),x:50,y:50,width:230,height:150,text:"New note",color:randCol()}});
+  const updateNote= (id,upd)=> sendWS({type:"note",action:"update",note:{id,...upd}});
+  const delNote   = (id)=>     sendWS({type:"note",action:"delete",note:{id}});
 
-  /* ---------- Save + Load (drawing + notes) ---------- */
-  const saveBoard = () => {
-    const boardData = {
-      image: canvasRef.current.toDataURL("image/png"),
-      notes,
-    };
-    localStorage.setItem("savedBoard", JSON.stringify(boardData));
-    alert("Board saved!");
-  };
+  /* misc */
+  const clearCanvas = () => {ctxRef.current.fillStyle="#ffffff";ctxRef.current.fillRect(0,0,canvasRef.current.width,canvasRef.current.height);setHistory([canvasRef.current.toDataURL()]);setRedo([]);}
+  const dlImg = async()=>{const snap=await html2canvas(boardRef.current,{backgroundColor:null});const a=document.createElement("a");a.href=snap.toDataURL("image/png");a.download=`board-${slug}.png`;a.click();}
+  const btn = (act=false)=>({padding:"10px 16px",margin:4,borderRadius:8,border:act?"2px solid #333":"1px solid #ccc",background:act?"#f0f0f0":"#fff",cursor:"pointer",fontWeight:"bold"});
+  const btn1 = (act=false)=>({padding:"10px 16px",margin:4,borderRadius:8,border:act?"2px solid #333":"1px solid #ccc",cursor:"pointer",fontWeight:"bold"});
 
-  const loadBoard = () => {
-    const data = localStorage.getItem("savedBoard");
-    if (!data) return alert("No saved board found!");
-    const { image, notes: savedNotes } = JSON.parse(data);
-
-    const img = new Image();
-    img.src = image;
-    img.onload = () => {
-      const ctx = ctxRef.current;
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      ctx.drawImage(img, 0, 0);
-      setHistory([image]);             // reset history
-      setRedoStack([]);
-      setNotes(savedNotes || []);
-    };
-  };
-
-  /* ---------- Sticky‑note helpers ---------- */
-  const getRandomColor = () => {
-    const pal = ["#fff475", "#f28b82", "#ccff90", "#a7ffeb", "#d7aefb", "#fdcfe8", "#aecbfa"];
-    return pal[Math.floor(Math.random() * pal.length)];
-  };
-
-  const addNote = () =>
-    setNotes((n) => [
-      ...n,
-      {
-        id: Date.now(),
-        x: 50,
-        y: 50,
-        width: 230,
-        height: 150,
-        text: "New note",
-        color: getRandomColor(),
-      },
-    ]);
-
-  const updateNote = (id, updates) =>
-    setNotes((n) => n.map((note) => (note.id === id ? { ...note, ...updates } : note)));
-
-  const deleteNote = (id) => setNotes((n) => n.filter((note) => note.id !== id));
-
-  /* ---------- Style helper ---------- */
-  const btn = (active = false) => ({
-    padding: "10px 16px",
-    margin: "4px",
-    borderRadius: "8px",
-    border: active ? "2px solid #333" : "1px solid #ccc",
-    background: active ? "#f0f0f0" : "#fff",
-    cursor: "pointer",
-    fontWeight: "bold",
-  });
-
-  /* ---------- Render ---------- */
   return (
-    <div style={{ fontFamily: "sans-serif", padding: 20 }}>
-      <h2 style={{ textAlign: "center", marginTop: 0 }}>🎨 Drawing Board</h2>
+    <div style={{fontFamily:"sans-serif",padding:20}}>
+      <h2 style={{textAlign:"center",marginTop:0}}>🎨 Drawing Board: {projectName}</h2>
+      <div className="container d-flex justify-content-end">
+        <button style={btn()} onClick={()=>setShowModal(true)}>Projects</button>
+        <button style={btn1()} className="btn btn-danger" onClick={handlelogout}>Logout</button>
+      </div>
+      
+      {/* Modal */}
+        {showModal && (
+          <div style={{
+            position: "fixed",
+            top: 0, left: 0,
+            width: "100%", height: "100%",
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999
+          }}>
+            <div style={{
+              background: "white",
+              padding: 20,
+              borderRadius: 8,
+              maxHeight: "80%",
+              overflowY: "auto",
+              width: "90%",
+              maxWidth: "500px",
+              position: "relative"
+            }}>
+              <button onClick={() => setShowModal(false)} style={{
+                position: "absolute", top: 10, right: 10, background: "red", color: "white", border: "none", borderRadius: 4, cursor: "pointer"
+              }}>✖</button>
+              <Projects />
+            </div>
+          </div>
+        )}
 
-      {/* Toolbar */}
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems:'center', marginBottom: 16 }}>
-        <button style={btn(tool === "pen")}    onClick={() => setTool("pen")}>✏️ Pen</button>
-        <button style={btn(tool === "eraser")} onClick={() => setTool("eraser")}>🧽 Eraser</button>
-        <input type="color" value={color} onChange={(e) => setColor(e.target.value)} style={{ margin: 4 }} />
-        <input type="range" min="1" max="30" value={lineWidth} onChange={(e) => setLineWidth(+e.target.value)} />
+      {/* toolbar */}
+      <div className="container" style={{display:"flex",flexWrap:"wrap",alignItems:"center",marginBottom:16}}>
+        <button style={btn(tool==="pen")}    onClick={()=>setTool("pen")}>✏️ Pen</button>
+        <button style={btn(tool==="eraser")} onClick={()=>setTool("eraser")}>🧽 Eraser</button>
+        <input type="color" value={color} onChange={(e)=>setColor(e.target.value)} style={{margin:4}} />
+        <input type="range" min="1" max="30" value={lineWidth} onChange={(e)=>setLineWidth(+e.target.value)} />
         <button style={btn()} onClick={undo}>↩️ Undo</button>
         <button style={btn()} onClick={redo}>↪️ Redo</button>
         <button style={btn()} onClick={clearCanvas}>🗑️ Clear</button>
-        <button style={btn()} onClick={downloadImage}>💾 Download</button>
-        <button style={btn()} onClick={saveBoard}>📥 Save</button>
-        <button style={btn()} onClick={loadBoard}>📤 Load</button>
+        <button style={btn()} onClick={dlImg}>💾 Download</button>
         <button style={btn()} onClick={addNote}>➕ Add Note</button>
       </div>
 
-      {/* Board container */}
-      <div style={{ display: "flex", justifyContent: "center" }}>
-        <div ref={boardRef} style={{ position: "relative", display: "inline-block" }}>
+      {/* board */}
+      <div className="container" style={{display:"flex",justifyContent:"center"}}>
+        <div ref={boardRef} style={{position:"relative",display:"inline-block"}}>
           <canvas
             ref={canvasRef}
-            onMouseDown={startDrawing}
+            onMouseDown={startDraw}
             onMouseMove={draw}
-            onMouseUp={stopDrawing}
-            onMouseLeave={stopDrawing}
-            style={{ border: "2px solid black", borderRadius: 10, background: "#ffffff" }}
+            onMouseUp={stopDraw}
+            onMouseLeave={stopDraw}
+            style={{border:"2px solid black",borderRadius:10,background:"#ffffff"}}
           />
-          {notes.map((note) => (
-            <StickyNote key={note.id} note={note} onUpdate={updateNote} onDelete={deleteNote} />
-          ))}
+          {notes.map((n)=><StickyNote key={n.id} note={n} onUpdate={updateNote} onDelete={delNote}/>)}
         </div>
       </div>
     </div>
