@@ -72,6 +72,9 @@ export default function DrawingBoard({ slug, initial, projectName  }) {
       const data = JSON.parse(evt.data);
       if (data.type === "draw")      replayStroke(data);
       else if (data.type === "note") handleNote(data);
+      else if (data.type === "canvas-clear") {
+        applyRemoteClear();
+      }
     };
 
     return () => socket.close();
@@ -93,12 +96,12 @@ export default function DrawingBoard({ slug, initial, projectName  }) {
   };
   const draw = ({ nativeEvent:{offsetX:x, offsetY:y} }) => {
     if (!isDrawing) return;
-    ctxRef.current.lineTo(x, y); ctxRef.current.stroke();
-    strokeBuf.current.push({x,y});
+      ctxRef.current.lineTo(x, y); ctxRef.current.stroke();
+      strokeBuf.current.push({x,y});
   };
   const stopDraw = () => {
     if (!isDrawing) return; setIsDrawing(false);
-    setHistory((h)=>[...h, canvasRef.current.toDataURL()]); setRedo([]);
+      setHistory((h)=>[...h, canvasRef.current.toDataURL()]); setRedo([]);
     if (strokeBuf.current.length>1) sendWS({type:"draw",tool,color,line_width:lineWidth,points:strokeBuf.current,username:USER_NAME});
   };
 
@@ -134,17 +137,34 @@ export default function DrawingBoard({ slug, initial, projectName  }) {
   const randCol = ()=>palette[Math.floor(Math.random()*palette.length)];
   const addNote   = ()=> sendWS({type:"note",action:"create",note:{id:uuidv4(),x:50,y:50,width:230,height:150,text:"New note",color:randCol()}});
   const updateNote= (id,upd)=> sendWS({type:"note",action:"update",note:{id,...upd}});
-  const delNote   = (id)=>     sendWS({type:"note",action:"delete",note:{id}});
+  const delNote   = (id)=> sendWS({type:"note",action:"delete",note:{id}});
+
+  // helper
+  const applyRemoteClear = () => {
+    ctxRef.current.fillStyle = "#ffffff";
+    ctxRef.current.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    setHistory([canvasRef.current.toDataURL()]);
+    setRedo([]);
+    setNotes([]);
+  };
 
   /* misc */
-  const clearCanvas = () => {ctxRef.current.fillStyle="#ffffff";ctxRef.current.fillRect(0,0,canvasRef.current.width,canvasRef.current.height);setHistory([canvasRef.current.toDataURL()]);setRedo([]);}
+  // in clearCanvas button handler
+  const clearCanvas = () => {
+    // applyRemoteClear();
+    sendWS({ type: "canvas-clear" });
+    notes.forEach((note) =>
+      sendWS({ type: "note", action: "delete", note: { id: note.id } })
+    );
+  };
+
   const dlImg = async()=>{const snap=await html2canvas(boardRef.current,{backgroundColor:null});const a=document.createElement("a");a.href=snap.toDataURL("image/png");a.download=`board-${slug}.png`;a.click();}
-  const btn = (act=false)=>({padding:"10px 16px",margin:4,borderRadius:8,border:act?"2px solid #333":"1px solid #ccc",background:act?"#f0f0f0":"#fff",cursor:"pointer",fontWeight:"bold"});
+  const btn = (act=false)=>({padding:"4px 8px",margin:4,borderRadius:8,border:act?"2px solid rgb(174 216 172)":"1px solid #ccc",background:act?"rgb(26 205 21)":"#fff",cursor:"pointer",fontWeight:"bold"});
   const btn1 = (act=false)=>({padding:"10px 16px",margin:4,borderRadius:8,border:act?"2px solid #333":"1px solid #ccc",cursor:"pointer",fontWeight:"bold"});
 
   return (
     <div style={{fontFamily:"sans-serif",padding:20}}>
-      <h2 style={{textAlign:"center",marginTop:0}}>🎨 Drawing Board: {projectName}</h2>
+      <h2 style={{textAlign:"center",marginTop:0}}>🎨 Drawing Board: <span style={{fontWeight:'500'}}>{projectName}</span></h2>
       <div className="container d-flex justify-content-end">
         <button style={btn()} onClick={()=>setShowModal(true)}>Projects</button>
         <button style={btn1()} className="btn btn-danger" onClick={handlelogout}>Logout</button>
@@ -181,7 +201,7 @@ export default function DrawingBoard({ slug, initial, projectName  }) {
         )}
 
       {/* toolbar */}
-      <div className="container" style={{display:"flex",flexWrap:"wrap",alignItems:"center",marginBottom:16}}>
+      <div className="container" style={{display:"flex",flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
         <button style={btn(tool==="pen")}    onClick={()=>setTool("pen")}>✏️ Pen</button>
         <button style={btn(tool==="eraser")} onClick={()=>setTool("eraser")}>🧽 Eraser</button>
         <input type="color" value={color} onChange={(e)=>setColor(e.target.value)} style={{margin:4}} />
